@@ -608,26 +608,27 @@ export default function VideoAdGenerator() {
             }
           }
 
-          // ✅ TTS عبر proxy — النص خالص + اللهجة في system_instruction
+          // ✅ TTS: أولاً Gemini، وإذا فشل نستخدم Web Speech API
           try {
             if (safeAudioText.trim() !== '') {
               const voiceName = inputs.voiceType === 'Female' ? 'Aoede' : 'Charon';
+              let geminiSuccess = false;
 
-              const ttsBody = {
-                system_instruction: {
-                  parts: [{ text: `تحدث بـ${inputs.dialect}. اجعل الأسلوب حيوياً ومقنعاً.` }],
-                },
-                contents: [{ parts: [{ text: safeAudioText }] }],
-                generationConfig: {
-                  responseModalities: ['AUDIO'],
-                  speechConfig: {
-                    voiceConfig: { prebuiltVoiceConfig: { voiceName } },
-                  },
-                },
-                model: 'gemini-2.5-flash-preview-tts',
-              };
-
+              // محاولة Gemini TTS أولاً
               try {
+                const ttsBody = {
+                  system_instruction: {
+                    parts: [{ text: `تحدث بـ${inputs.dialect}. اجعل الأسلوب حيوياً ومقنعاً.` }],
+                  },
+                  contents: [{ parts: [{ text: safeAudioText }] }],
+                  generationConfig: {
+                    responseModalities: ['AUDIO'],
+                    speechConfig: {
+                      voiceConfig: { prebuiltVoiceConfig: { voiceName } },
+                    },
+                  },
+                  model: 'gemini-2.5-flash-preview-tts',
+                };
                 const ttsData = await geminiProxy(
                   'models/gemini-2.5-flash-preview-tts:generateContent',
                   ttsBody
@@ -636,25 +637,60 @@ export default function VideoAdGenerator() {
                   ttsData.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
                 if (pcmBase64) {
                   const wavBlob = pcmToWav(pcmBase64, 24000);
-                  if (wavBlob) audioUrl = URL.createObjectURL(wavBlob);
+                  if (wavBlob) {
+                    audioUrl = URL.createObjectURL(wavBlob);
+                    geminiSuccess = true;
+                  }
                 }
               } catch (e1) {
-                // fallback: gemini-2.0-flash-preview-tts
-                try {
-                  const ttsBody2 = { ...ttsBody, model: 'gemini-2.0-flash-preview-tts' };
-                  const ttsData2 = await geminiProxy(
-                    'models/gemini-2.0-flash-preview-tts:generateContent',
-                    ttsBody2
-                  );
-                  const pcmBase64 =
-                    ttsData2.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-                  if (pcmBase64) {
-                    const wavBlob = pcmToWav(pcmBase64, 24000);
-                    if (wavBlob) audioUrl = URL.createObjectURL(wavBlob);
+                console.warn('Gemini TTS غير متاح، نستخدم Web Speech API');
+              }
+
+              // Fallback: Web Speech API المجانية
+              if (!geminiSuccess && 'speechSynthesis' in window) {
+                audioUrl = await new Promise((resolve) => {
+                  const synth = window.speechSynthesis;
+                  const utterance = new SpeechSynthesisUtterance(safeAudioText);
+                  utterance.lang = 'ar-SA';
+                  utterance.rate = 0.85;
+                  utterance.pitch = inputs.voiceType === 'Female' ? 1.3 : 0.8;
+                  utterance.volume = 1;
+
+                  // نختار أفضل صوت عربي متاح
+                  const voices = synth.getVoices();
+                  const arabicVoice = voices.find(v =>
+                    v.lang.startsWith('ar') &&
+                    (inputs.voiceType === 'Female' ? v.name.includes('Female') || v.name.includes('Fem') : true)
+                  ) || voices.find(v => v.lang.startsWith('ar'));
+                  if (arabicVoice) utterance.voice = arabicVoice;
+
+                  // نحوّل الكلام لـ blob عبر MediaRecorder
+                  try {
+                    const audioCtxTemp = new (window.AudioContext || window.webkitAudioContext)();
+                    const dest = audioCtxTemp.createMediaStreamDestination();
+                    const recorder = new MediaRecorder(dest.stream);
+                    const chunks = [];
+                    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+                    recorder.onstop = () => {
+                      const blob = new Blob(chunks, { type: 'audio/webm' });
+                      resolve(URL.createObjectURL(blob));
+                      audioCtxTemp.close();
+                    };
+                    recorder.start();
+                    utterance.onend = () => {
+                      setTimeout(() => recorder.stop(), 300);
+                    };
+                    utterance.onerror = () => {
+                      recorder.stop();
+                      resolve('');
+                    };
+                    synth.speak(utterance);
+                  } catch (e) {
+                    // إذا فشل التسجيل، نستخدم SpeechSynthesis مباشرة بدون blob
+                    synth.speak(utterance);
+                    resolve('webspeech:' + safeAudioText);
                   }
-                } catch (e2) {
-                  console.warn('TTS فشل على النموذجين:', e2);
-                }
+                });
               }
             }
           } catch (e) {
