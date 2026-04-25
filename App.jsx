@@ -348,14 +348,30 @@ export default function VideoAdGenerator() {
     reader.readAsDataURL(file);
   };
 
+  // ✅ دالة مساعدة تستدعي الـ proxy بدل Gemini مباشرة
+  const geminiProxy = async (endpoint, body) => {
+    const res = await fetch('/api/gemini', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint, apiKey: geminiKey.trim(), body }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `خطأ ${res.status} من الخادم`);
+    }
+    return res.json();
+  };
+
   const getAvailableModel = async () => {
     try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKey.trim()}`
-      );
+      const res = await fetch('/api/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: geminiKey.trim() }),
+      });
       if (!res.ok) throw new Error('مفتاح Gemini غير صالح.');
       const data = await res.json();
-      const validModels = data.models.filter((m) =>
+      const validModels = (data.models || []).filter((m) =>
         m.supportedGenerationMethods?.includes('generateContent')
       );
       const selected =
@@ -393,16 +409,7 @@ export default function VideoAdGenerator() {
         ],
         generationConfig: { responseMimeType: 'application/json' },
       };
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/${workingModelName}:generateContent?key=${geminiKey.trim()}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }
-      );
-      if (!res.ok) throw new Error('فشل تحليل الصورة من قبل السيرفر.');
-      const data = await res.json();
+      const data = await geminiProxy(`${workingModelName}:generateContent`, payload);
       let rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!rawText) throw new Error('استجابة السيرفر كانت فارغة.');
       rawText = rawText
@@ -509,17 +516,7 @@ export default function VideoAdGenerator() {
         },
       };
 
-      const scriptRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/${workingModelName}:generateContent?key=${geminiKey.trim()}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }
-      );
-      if (!scriptRes.ok)
-        throw new Error(`خطأ من الخادم (تأكد من المفتاح ومطابقته للخدمة).`);
-      const scriptData = await scriptRes.json();
+      const scriptData = await geminiProxy(`${workingModelName}:generateContent`, payload);
       let rawText = scriptData.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!rawText)
         throw new Error(
@@ -593,7 +590,7 @@ export default function VideoAdGenerator() {
               } catch (e) {}
             }
 
-            // ✅ إصلاح #1: استخدام preloadImage مع fallback تلقائي
+            // ✅ الصور عبر proxy لحل CORS
             if (!imageUrl) {
               const rawUrl = getFreeImageUrl(
                 safeVisualPrompt,
@@ -602,79 +599,61 @@ export default function VideoAdGenerator() {
                 platformConfig.h,
                 index
               );
-              // نبدأ التحميل المسبق في الخلفية ونُسجّل الحالة
+              // نمرر الرابط عبر image-proxy ديالنا
+              const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(rawUrl)}`;
               imageUrl = await preloadImage(
-                rawUrl,
+                proxiedUrl,
                 fallbackImages[index % fallbackImages.length]
               );
             }
           }
 
-          // ✅ TTS: النص خالص + اللهجة في system_instruction منفصل
+          // ✅ TTS عبر proxy — النص خالص + اللهجة في system_instruction
           try {
             if (safeAudioText.trim() !== '') {
               const voiceName = inputs.voiceType === 'Female' ? 'Aoede' : 'Charon';
 
-              const ttsRes = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiKey.trim()}`,
-                {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    // ✅ اللهجة هنا في system_instruction — لا تلوّث النص
-                    system_instruction: {
-                      parts: [{ text: `تحدث بـ${inputs.dialect}. اجعل الأسلوب حيوياً ومقنعاً.` }],
-                    },
-                    // ✅ النص عربي خالص تماماً كما في الكود الأصلي
-                    contents: [{ parts: [{ text: safeAudioText }] }],
-                    generationConfig: {
-                      responseModalities: ['AUDIO'],
-                      speechConfig: {
-                        voiceConfig: { prebuiltVoiceConfig: { voiceName } },
-                      },
-                    },
-                    model: 'gemini-2.5-flash-preview-tts',
-                  }),
-                }
-              );
+              const ttsBody = {
+                system_instruction: {
+                  parts: [{ text: `تحدث بـ${inputs.dialect}. اجعل الأسلوب حيوياً ومقنعاً.` }],
+                },
+                contents: [{ parts: [{ text: safeAudioText }] }],
+                generationConfig: {
+                  responseModalities: ['AUDIO'],
+                  speechConfig: {
+                    voiceConfig: { prebuiltVoiceConfig: { voiceName } },
+                  },
+                },
+                model: 'gemini-2.5-flash-preview-tts',
+              };
 
-              if (ttsRes.ok) {
-                const ttsData = await ttsRes.json();
+              try {
+                const ttsData = await geminiProxy(
+                  'models/gemini-2.5-flash-preview-tts:generateContent',
+                  ttsBody
+                );
                 const pcmBase64 =
                   ttsData.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
                 if (pcmBase64) {
                   const wavBlob = pcmToWav(pcmBase64, 24000);
                   if (wavBlob) audioUrl = URL.createObjectURL(wavBlob);
                 }
-              } else {
+              } catch (e1) {
                 // fallback: gemini-2.0-flash-preview-tts
-                const ttsRes2 = await fetch(
-                  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-preview-tts:generateContent?key=${geminiKey.trim()}`,
-                  {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      system_instruction: {
-                        parts: [{ text: `تحدث بـ${inputs.dialect}.` }],
-                      },
-                      contents: [{ parts: [{ text: safeAudioText }] }],
-                      generationConfig: {
-                        responseModalities: ['AUDIO'],
-                        speechConfig: {
-                          voiceConfig: { prebuiltVoiceConfig: { voiceName } },
-                        },
-                      },
-                    }),
-                  }
-                );
-                if (ttsRes2.ok) {
-                  const ttsData2 = await ttsRes2.json();
+                try {
+                  const ttsBody2 = { ...ttsBody, model: 'gemini-2.0-flash-preview-tts' };
+                  const ttsData2 = await geminiProxy(
+                    'models/gemini-2.0-flash-preview-tts:generateContent',
+                    ttsBody2
+                  );
                   const pcmBase64 =
                     ttsData2.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
                   if (pcmBase64) {
                     const wavBlob = pcmToWav(pcmBase64, 24000);
                     if (wavBlob) audioUrl = URL.createObjectURL(wavBlob);
                   }
+                } catch (e2) {
+                  console.warn('TTS فشل على النموذجين:', e2);
                 }
               }
             }
