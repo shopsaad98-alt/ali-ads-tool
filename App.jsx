@@ -802,25 +802,8 @@ export default function VideoAdGenerator() {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const dest = audioCtx.createMediaStreamDestination();
 
-    // دمج الموسيقى الخلفية
+    // BGM disabled
     let bgmSource = null;
-    try {
-      const bgmRes = await fetch(
-        'https://cdn.pixabay.com/download/audio/2022/03/15/audio_24e03079b7.mp3?filename=upbeat-energetic-pop-110054.mp3'
-      );
-      const bgmBuffer = await bgmRes.arrayBuffer();
-      const bgmAudioBuffer = await audioCtx.decodeAudioData(bgmBuffer);
-      bgmSource = audioCtx.createBufferSource();
-      bgmSource.buffer = bgmAudioBuffer;
-      bgmSource.loop = true;
-      const gainNode = audioCtx.createGain();
-      gainNode.gain.value = 0.15;
-      bgmSource.connect(gainNode);
-      gainNode.connect(dest);
-      bgmSource.start(0);
-    } catch (e) {
-      console.log('BGM Error', e);
-    }
 
     const canvasStream = canvas.captureStream(30);
     const tracks = [...canvasStream.getTracks(), ...dest.stream.getTracks()];
@@ -844,7 +827,7 @@ export default function VideoAdGenerator() {
       // ⚡️ حفظ الرابط في الـ State للزر الآمن بدلاً من النقر المباشر المرفوض
       setFinalVideoUrl(url);
       setIsRecording(false);
-      if (bgmSource) bgmSource.stop();
+      // bgmSource disabled
     };
     recorder.start();
 
@@ -1063,7 +1046,7 @@ export default function VideoAdGenerator() {
         mediaElement.currentTime = 0;
         mediaElement.play().catch((e) => console.log(e));
       }
-      if (scene.audioUrl) {
+      if (scene.audioUrl && !scene.audioUrl.startsWith('webspeech:')) {
         try {
           const response = await fetch(scene.audioUrl);
           const arrayBuffer = await response.arrayBuffer();
@@ -1073,7 +1056,7 @@ export default function VideoAdGenerator() {
           source.connect(dest);
           source.start(0);
           duration = audioBuffer.duration * 1000;
-          sceneDurationForCanvas = duration; // تحديث المتغير للرسم
+          sceneDurationForCanvas = duration;
           setRecordingProgress(Math.floor((i / videoScenes.length) * 100));
           await new Promise((resolve) => setTimeout(resolve, duration));
         } catch (e) {
