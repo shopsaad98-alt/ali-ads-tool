@@ -646,51 +646,9 @@ export default function VideoAdGenerator() {
                 console.warn('Gemini TTS غير متاح، نستخدم Web Speech API');
               }
 
-              // Fallback: Web Speech API المجانية
-              if (!geminiSuccess && 'speechSynthesis' in window) {
-                audioUrl = await new Promise((resolve) => {
-                  const synth = window.speechSynthesis;
-                  const utterance = new SpeechSynthesisUtterance(safeAudioText);
-                  utterance.lang = 'ar-SA';
-                  utterance.rate = 0.85;
-                  utterance.pitch = inputs.voiceType === 'Female' ? 1.3 : 0.8;
-                  utterance.volume = 1;
-
-                  // نختار أفضل صوت عربي متاح
-                  const voices = synth.getVoices();
-                  const arabicVoice = voices.find(v =>
-                    v.lang.startsWith('ar') &&
-                    (inputs.voiceType === 'Female' ? v.name.includes('Female') || v.name.includes('Fem') : true)
-                  ) || voices.find(v => v.lang.startsWith('ar'));
-                  if (arabicVoice) utterance.voice = arabicVoice;
-
-                  // نحوّل الكلام لـ blob عبر MediaRecorder
-                  try {
-                    const audioCtxTemp = new (window.AudioContext || window.webkitAudioContext)();
-                    const dest = audioCtxTemp.createMediaStreamDestination();
-                    const recorder = new MediaRecorder(dest.stream);
-                    const chunks = [];
-                    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-                    recorder.onstop = () => {
-                      const blob = new Blob(chunks, { type: 'audio/webm' });
-                      resolve(URL.createObjectURL(blob));
-                      audioCtxTemp.close();
-                    };
-                    recorder.start();
-                    utterance.onend = () => {
-                      setTimeout(() => recorder.stop(), 300);
-                    };
-                    utterance.onerror = () => {
-                      recorder.stop();
-                      resolve('');
-                    };
-                    synth.speak(utterance);
-                  } catch (e) {
-                    // إذا فشل التسجيل، نستخدم SpeechSynthesis مباشرة بدون blob
-                    synth.speak(utterance);
-                    resolve('webspeech:' + safeAudioText);
-                  }
-                });
+              // Fallback: Web Speech API — نحفظ النص كـ marker
+              if (!geminiSuccess) {
+                audioUrl = 'webspeech:' + safeAudioText;
               }
             }
           } catch (e) {
@@ -738,16 +696,26 @@ export default function VideoAdGenerator() {
       currentSceneIdx < videoScenes.length
     ) {
       const currentScene = videoScenes[currentSceneIdx];
-      if (bgMusicRef.current && currentSceneIdx === 0) {
-        bgMusicRef.current.volume = 0.15;
-        bgMusicRef.current.play().catch((e) => console.log('BGM blocked', e));
-      }
+      // BGM disabled (external URL blocked)
       const words = String(currentScene.audio_text || '').split(' ');
       if (currentScene && currentScene.audioUrl && audioRef.current) {
-        audioRef.current.src = currentScene.audioUrl;
-        audioRef.current
-          .play()
-          .catch((e) => console.log('Audio play blocked', e));
+        // تحقق إذا كان Web Speech
+        if (currentScene.audioUrl.startsWith('webspeech:')) {
+          const text = currentScene.audioUrl.replace('webspeech:', '');
+          if ('speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+            const utt = new SpeechSynthesisUtterance(text);
+            utt.lang = 'ar-SA';
+            utt.rate = 0.85;
+            utt.onend = () => handleNextScene();
+            window.speechSynthesis.speak(utt);
+          }
+        } else {
+          audioRef.current.src = currentScene.audioUrl;
+          audioRef.current
+            .play()
+            .catch((e) => console.log('Audio play blocked', e));
+        }
         interval = setInterval(() => {
           if (audioRef.current && audioRef.current.duration) {
             const currentTime = audioRef.current.currentTime;
