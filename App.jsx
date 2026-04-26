@@ -72,7 +72,7 @@ function pcmToWav(base64Pcm, sampleRate = 24000) {
 }
 
 const downloadFile = async (url, filename) => {
-  if (!url) return;
+  if (!url || url.startsWith('webspeech:')) return;
   try {
     const a = document.createElement('a');
     a.href = url;
@@ -608,46 +608,75 @@ export default function VideoAdGenerator() {
             }
           }
 
-          // ✅ TTS: أولاً Gemini، وإذا فشل نستخدم Web Speech API
+          // ✅ TTS: أولاً OpenAI، ثم Gemini، ثم Web Speech
           try {
             if (safeAudioText.trim() !== '') {
-              const voiceName = inputs.voiceType === 'Female' ? 'Aoede' : 'Charon';
-              let geminiSuccess = false;
+              let ttsSuccess = false;
 
-              // محاولة Gemini TTS أولاً
-              try {
-                const ttsBody = {
-                  system_instruction: {
-                    parts: [{ text: `تحدث بـ${inputs.dialect}. اجعل الأسلوب حيوياً ومقنعاً.` }],
-                  },
-                  contents: [{ parts: [{ text: safeAudioText }] }],
-                  generationConfig: {
-                    responseModalities: ['AUDIO'],
-                    speechConfig: {
-                      voiceConfig: { prebuiltVoiceConfig: { voiceName } },
+              // 1️⃣ OpenAI TTS — أفضل جودة للعربية
+              if (openaiKey && openaiKey.trim()) {
+                try {
+                  const openaiVoice = inputs.voiceType === 'Female' ? 'nova' : 'onyx';
+                  const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${openaiKey.trim()}`,
                     },
-                  },
-                  model: 'gemini-2.5-flash-preview-tts',
-                };
-                const ttsData = await geminiProxy(
-                  'models/gemini-2.5-flash-preview-tts:generateContent',
-                  ttsBody
-                );
-                const pcmBase64 =
-                  ttsData.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-                if (pcmBase64) {
-                  const wavBlob = pcmToWav(pcmBase64, 24000);
-                  if (wavBlob) {
-                    audioUrl = URL.createObjectURL(wavBlob);
-                    geminiSuccess = true;
+                    body: JSON.stringify({
+                      model: 'tts-1',
+                      input: safeAudioText,
+                      voice: openaiVoice,
+                      speed: 0.9,
+                    }),
+                  });
+                  if (ttsRes.ok) {
+                    const audioBlob = await ttsRes.blob();
+                    audioUrl = URL.createObjectURL(audioBlob);
+                    ttsSuccess = true;
                   }
+                } catch (e1) {
+                  console.warn('OpenAI TTS فشل:', e1);
                 }
-              } catch (e1) {
-                console.warn('Gemini TTS غير متاح، نستخدم Web Speech API');
               }
 
-              // Fallback: Web Speech API — نحفظ النص كـ marker
-              if (!geminiSuccess) {
+              // 2️⃣ Gemini TTS كـ fallback
+              if (!ttsSuccess) {
+                try {
+                  const voiceName = inputs.voiceType === 'Female' ? 'Aoede' : 'Charon';
+                  const ttsBody = {
+                    system_instruction: {
+                      parts: [{ text: `تحدث بـ${inputs.dialect}. اجعل الأسلوب حيوياً ومقنعاً.` }],
+                    },
+                    contents: [{ parts: [{ text: safeAudioText }] }],
+                    generationConfig: {
+                      responseModalities: ['AUDIO'],
+                      speechConfig: {
+                        voiceConfig: { prebuiltVoiceConfig: { voiceName } },
+                      },
+                    },
+                    model: 'gemini-2.5-flash-preview-tts',
+                  };
+                  const ttsData = await geminiProxy(
+                    'models/gemini-2.5-flash-preview-tts:generateContent',
+                    ttsBody
+                  );
+                  const pcmBase64 =
+                    ttsData.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+                  if (pcmBase64) {
+                    const wavBlob = pcmToWav(pcmBase64, 24000);
+                    if (wavBlob) {
+                      audioUrl = URL.createObjectURL(wavBlob);
+                      ttsSuccess = true;
+                    }
+                  }
+                } catch (e2) {
+                  console.warn('Gemini TTS فشل أيضاً');
+                }
+              }
+
+              // 3️⃣ Web Speech كـ آخر خيار
+              if (!ttsSuccess) {
                 audioUrl = 'webspeech:' + safeAudioText;
               }
             }
@@ -707,9 +736,14 @@ export default function VideoAdGenerator() {
             const utt = new SpeechSynthesisUtterance(text);
             utt.lang = 'ar-SA';
             utt.rate = 0.85;
+            utt.volume = 1;
+            const voices = window.speechSynthesis.getVoices();
+            const arabicVoice = voices.find(v => v.lang.startsWith('ar'));
+            if (arabicVoice) utt.voice = arabicVoice;
             utt.onend = () => handleNextScene();
             window.speechSynthesis.speak(utt);
           }
+          // لا نضع src في audioRef لأن webspeech ليس رابط حقيقي
         } else {
           audioRef.current.src = currentScene.audioUrl;
           audioRef.current
@@ -1218,7 +1252,7 @@ export default function VideoAdGenerator() {
             <div className="space-y-4">
               <div>
                 <label className="block text-[11px] font-black text-indigo-400 mb-1">
-                  مفتاح Gemini (إلزامي للسكريبت والصوت)
+                  مفتاح Gemini (إلزامي للسكريبت)
                 </label>
                 <input
                   type="password"
@@ -1227,6 +1261,19 @@ export default function VideoAdGenerator() {
                   onChange={(e) => setGeminiKey(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl py-3 px-4 text-white text-sm focus:border-indigo-500 font-mono"
                   placeholder="AIzaSy..."
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-black text-emerald-400 mb-1">
+                  مفتاح OpenAI (للتعليق الصوتي عالي الجودة) 🎙️
+                </label>
+                <input
+                  type="password"
+                  name="openaiKey"
+                  value={openaiKey}
+                  onChange={(e) => setOpenaiKey(e.target.value)}
+                  className="w-full bg-slate-950 border border-emerald-800 rounded-xl py-3 px-4 text-white text-sm focus:border-emerald-500 font-mono"
+                  placeholder="sk-..."
                 />
               </div>
             </div>
@@ -1890,7 +1937,7 @@ export default function VideoAdGenerator() {
                               className="hidden"
                             />
                           </label>
-                          {scene.audioUrl && (
+                          {scene.audioUrl && !scene.audioUrl.startsWith('webspeech:') && (
                             <button
                               onClick={() =>
                                 downloadFile(
