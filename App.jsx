@@ -469,7 +469,8 @@ export default function VideoAdGenerator() {
             3. لكل مشهد استنتج وصف بصري باللغة الإنجليزية (English ONLY) خالي من الرموز.
             🚨 قاعدة صارمة جداً: ممنوع منعاً باتاً ذكر أشخاص أو وجوه أو أيدي (NO PEOPLE, NO FACES, NO HANDS). ركز الوصف البصري على: المنتج بحد ذاته (Product shot) أو بيئة الاستخدام فقط.`;
       } else {
-        promptText = `أنت مخرج إعلانات محترف لمنصة ${platformConfig.name}. اكتب سكريبت إعلاني بنمط "${videoTypeName}" من 4 مشاهد بالضبط لمنتج: "${inputs.productName}". الجمهور: ${inputs.targetAudience}. الفائدة: ${inputs.mainBenefit}. اللهجة: ${inputs.dialect}.
+        promptText = `أنت مخرج إعلانات محترف لمنصة ${platformConfig.name}. اكتب سكريبت إعلاني بنمط "${videoTypeName}" من 4 مشاهد بالضبط لمنتج: "${inputs.productName}". الجمهور: ${inputs.targetAudience}. الفائدة: ${inputs.mainBenefit}.
+            🗣️ مهم جداً: اكتب النص بـ${inputs.dialect} بشكل طبيعي وعفوي كما يتكلم الناس في الشارع — استخدم كلمات بسيطة ومألوفة لهذه اللهجة فقط. تجنب الفصحى تماماً.
             - المشهد 1: Hook يخطف الانتباه.
             - باقي المشاهد: عرض المشكلة والحل، ثم دعوة للعمل.
             - visual_prompt: توجيه باللغة الإنجليزية (English ONLY).
@@ -613,25 +614,23 @@ export default function VideoAdGenerator() {
             if (safeAudioText.trim() !== '') {
               let ttsSuccess = false;
 
-              // 1️⃣ OpenAI TTS — أفضل جودة للعربية
+              // 1️⃣ OpenAI TTS عبر proxy — أفضل جودة للعربية
               if (openaiKey && openaiKey.trim()) {
                 try {
                   const openaiVoice = inputs.voiceType === 'Female' ? 'nova' : 'onyx';
-                  const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+                  const ttsRes = await fetch('/api/openai-tts', {
                     method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${openaiKey.trim()}`,
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      model: 'tts-1',
-                      input: safeAudioText,
+                      apiKey: openaiKey.trim(),
+                      text: safeAudioText,
                       voice: openaiVoice,
                       speed: 0.9,
                     }),
                   });
                   if (ttsRes.ok) {
-                    const audioBlob = await ttsRes.blob();
+                    const audioArrayBuffer = await ttsRes.arrayBuffer();
+                    const audioBlob = new Blob([audioArrayBuffer], { type: 'audio/mpeg' });
                     audioUrl = URL.createObjectURL(audioBlob);
                     ttsSuccess = true;
                   }
@@ -1083,16 +1082,17 @@ export default function VideoAdGenerator() {
       if (scene.audioUrl && !scene.audioUrl.startsWith('webspeech:')) {
         try {
           const response = await fetch(scene.audioUrl);
+          if (!response.ok) throw new Error('fetch failed');
           const arrayBuffer = await response.arrayBuffer();
-          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
           const source = audioCtx.createBufferSource();
           source.buffer = audioBuffer;
           source.connect(dest);
-          source.start(0);
+          source.start(audioCtx.currentTime);
           duration = audioBuffer.duration * 1000;
           sceneDurationForCanvas = duration;
           setRecordingProgress(Math.floor((i / videoScenes.length) * 100));
-          await new Promise((resolve) => setTimeout(resolve, duration));
+          await new Promise((resolve) => setTimeout(resolve, duration + 200));
         } catch (e) {
           console.error('Audio recording error', e);
           await new Promise((resolve) => setTimeout(resolve, duration));
@@ -1805,12 +1805,7 @@ export default function VideoAdGenerator() {
                     onEnded={handleNextScene}
                     className="hidden"
                   />
-                  <audio
-                    ref={bgMusicRef}
-                    loop
-                    src="https://cdn.pixabay.com/download/audio/2022/03/15/audio_24e03079b7.mp3?filename=upbeat-energetic-pop-110054.mp3"
-                    className="hidden"
-                  />
+                  {/* BGM disabled */}
                 </div>
 
                 <button
