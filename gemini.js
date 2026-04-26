@@ -7,16 +7,12 @@ export default async function handler(req, res) {
   const { endpoint, apiKey, body } = req.body;
   if (!endpoint || !apiKey) return res.status(400).json({ error: 'Missing endpoint or apiKey' });
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 55000);
     const url = `https://generativelanguage.googleapis.com/v1beta/${endpoint}?key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: controller.signal,
     });
-    clearTimeout(timeout);
     const data = await response.json();
     return res.status(response.status).json(data);
   } catch (error) {
