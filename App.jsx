@@ -629,8 +629,7 @@ export default function VideoAdGenerator() {
                     }),
                   });
                   if (ttsRes.ok) {
-                    const audioArrayBuffer = await ttsRes.arrayBuffer();
-                    const audioBlob = new Blob([audioArrayBuffer], { type: 'audio/mpeg' });
+                    const audioBlob = await ttsRes.blob();
                     audioUrl = URL.createObjectURL(audioBlob);
                     ttsSuccess = true;
                   }
@@ -1081,10 +1080,16 @@ export default function VideoAdGenerator() {
       }
       if (scene.audioUrl && !scene.audioUrl.startsWith('webspeech:')) {
         try {
-          const response = await fetch(scene.audioUrl);
-          if (!response.ok) throw new Error('fetch failed');
-          const arrayBuffer = await response.arrayBuffer();
-          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+          // استخدام XMLHttpRequest لتجنب مشاكل fetch مع blob URLs
+          const arrayBuffer = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', scene.audioUrl, true);
+            xhr.responseType = 'arraybuffer';
+            xhr.onload = () => resolve(xhr.response);
+            xhr.onerror = reject;
+            xhr.send();
+          });
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
           const source = audioCtx.createBufferSource();
           source.buffer = audioBuffer;
           source.connect(dest);
@@ -1092,7 +1097,7 @@ export default function VideoAdGenerator() {
           duration = audioBuffer.duration * 1000;
           sceneDurationForCanvas = duration;
           setRecordingProgress(Math.floor((i / videoScenes.length) * 100));
-          await new Promise((resolve) => setTimeout(resolve, duration + 200));
+          await new Promise((resolve) => setTimeout(resolve, duration + 300));
         } catch (e) {
           console.error('Audio recording error', e);
           await new Promise((resolve) => setTimeout(resolve, duration));
