@@ -85,6 +85,12 @@ const downloadFile = async (url, filename) => {
   }
 };
 
+// ⚡️ ElevenLabs Voice IDs
+const ELEVENLABS_VOICES = {
+  Male: '5lXEHh42xcasVuJofypc',
+  Female: 'OfGMGmhShO8iL9jCkXy8',
+};
+
 // ⚡️ قائمة اللهجات العربية الكاملة
 const ARABIC_DIALECTS = [
   { value: 'لهجة خليجية سعودية', label: '🇸🇦 خليجية سعودية' },
@@ -258,6 +264,7 @@ export default function VideoAdGenerator() {
   const [isReady, setIsReady] = useState(false);
   const [geminiKey, setGeminiKey] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');
+  const [elevenlabsKey, setElevenlabsKey] = useState('');
   const [inputs, setInputs] = useState({
     productName: '',
     targetAudience: '',
@@ -469,12 +476,30 @@ export default function VideoAdGenerator() {
             3. لكل مشهد استنتج وصف بصري باللغة الإنجليزية (English ONLY) خالي من الرموز.
             🚨 قاعدة صارمة جداً: ممنوع منعاً باتاً ذكر أشخاص أو وجوه أو أيدي (NO PEOPLE, NO FACES, NO HANDS). ركز الوصف البصري على: المنتج بحد ذاته (Product shot) أو بيئة الاستخدام فقط.`;
       } else {
-        promptText = `أنت مخرج إعلانات محترف لمنصة ${platformConfig.name}. اكتب سكريبت إعلاني بنمط "${videoTypeName}" من 4 مشاهد بالضبط لمنتج: "${inputs.productName}". الجمهور: ${inputs.targetAudience}. الفائدة: ${inputs.mainBenefit}.
-            🗣️ مهم جداً: اكتب النص بـ${inputs.dialect} بشكل طبيعي وعفوي كما يتكلم الناس في الشارع — استخدم كلمات بسيطة ومألوفة لهذه اللهجة فقط. تجنب الفصحى تماماً.
-            - المشهد 1: Hook يخطف الانتباه.
+        // قاموس اللهجات للمساعدة في الكتابة الصحيحة
+        const dialectGuide = {
+          'لهجة مغربية دارجة': `استخدم هذه الكلمات المغربية الحقيقية:
+            - "واش" بدل "هل", "كتعرف/كتعرفي" بدل "تعرف", "بزاف" بدل "كثيراً"
+            - "مزيان/مزيانة" بدل "جيد", "خاصك" بدل "يجب عليك", "دابا" بدل "الآن"
+            - "ماشي" بدل "ليس", "بغيت" بدل "أريد", "كاين/كاينة" بدل "موجود"
+            - "غير" بدل "فقط", "هاد" بدل "هذا", "ديال" بدل "خاص بـ"
+            - "تقدر" بدل "تستطيع", "مع غياب" → "بلا", "زعما" بدل "يعني"
+            مثال: "واش بغيتي تبان مزيان؟ دابا كاين الحل ديالك!"`,
+          'لهجة مصرية قاهرية': `استخدم: "إيه" بدل "ما", "عارف" بدل "تعرف", "كتير" بدل "كثير", "دلوقتي" بدل "الآن"`,
+          'لهجة خليجية سعودية': `استخدم: "وش" بدل "ماذا", "زين" بدل "جيد", "حق" بدل "لـ", "يبغى" بدل "يريد"`,
+        };
+        const dialectHint = dialectGuide[inputs.dialect] || `اكتب بـ${inputs.dialect} الطبيعية`;
+
+        promptText = `أنت مخرج إعلانات محترف. اكتب سكريبت إعلاني من 4 مشاهد لمنتج: "${inputs.productName}". الجمهور: ${inputs.targetAudience}. الفائدة: ${inputs.mainBenefit}.
+
+            🗣️ اللهجة المطلوبة: ${inputs.dialect}
+            ${dialectHint}
+            اكتب النص كما يتكلم الناس في الشارع — طبيعي وعفوي وبكلمات اللهجة الحقيقية فقط. ممنوع الفصحى تماماً.
+
+            - المشهد 1: Hook قوي يخطف الانتباه باللهجة.
             - باقي المشاهد: عرض المشكلة والحل، ثم دعوة للعمل.
-            - visual_prompt: توجيه باللغة الإنجليزية (English ONLY).
-            🚨 قاعدة صارمة جداً لتجنب التشوهات البصرية: ممنوع ذكر أي بشر أو وجوه (NO PEOPLE, NO FACES). اجعل الوصف يركز حصراً على المنتج بتصوير مقرب (Macro product shot) أو في بيئة جذابة.`;
+            - visual_prompt: باللغة الإنجليزية فقط (English ONLY).
+            🚨 ممنوع ذكر أي بشر أو وجوه في visual_prompt (NO PEOPLE, NO FACES).`;
       }
 
       const payload = {
@@ -614,8 +639,31 @@ export default function VideoAdGenerator() {
             if (safeAudioText.trim() !== '') {
               let ttsSuccess = false;
 
-              // 1️⃣ OpenAI TTS عبر proxy — أفضل جودة للعربية
-              if (openaiKey && openaiKey.trim()) {
+              // 1️⃣ ElevenLabs TTS — أفضل جودة + لهجة مغربية
+              if (elevenlabsKey && elevenlabsKey.trim()) {
+                try {
+                  const voiceId = ELEVENLABS_VOICES[inputs.voiceType] || ELEVENLABS_VOICES.Male;
+                  const elRes = await fetch('/api/elevenlabs-tts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      apiKey: elevenlabsKey.trim(),
+                      text: safeAudioText,
+                      voiceId: voiceId,
+                    }),
+                  });
+                  if (elRes.ok) {
+                    const audioBlob = await elRes.blob();
+                    audioUrl = URL.createObjectURL(audioBlob);
+                    ttsSuccess = true;
+                  }
+                } catch (e0) {
+                  console.warn('ElevenLabs TTS فشل:', e0);
+                }
+              }
+
+              // 2️⃣ OpenAI TTS عبر proxy
+              if (!ttsSuccess && openaiKey && openaiKey.trim()) {
                 try {
                   const openaiVoice = inputs.voiceType === 'Female' ? 'nova' : 'onyx';
                   const ttsRes = await fetch('/api/openai-tts', {
@@ -638,7 +686,7 @@ export default function VideoAdGenerator() {
                 }
               }
 
-              // 2️⃣ Gemini TTS كـ fallback
+              // 3️⃣ Gemini TTS كـ fallback
               if (!ttsSuccess) {
                 try {
                   const voiceName = inputs.voiceType === 'Female' ? 'Aoede' : 'Charon';
@@ -682,6 +730,21 @@ export default function VideoAdGenerator() {
             console.error('Audio err', e);
           }
 
+          // حفظ الـ ArrayBuffer مباشرة للتصدير
+          let audioArrayBuffer = null;
+          if (audioUrl && !audioUrl.startsWith('webspeech:')) {
+            try {
+              audioArrayBuffer = await new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', audioUrl, true);
+                xhr.responseType = 'arraybuffer';
+                xhr.onload = () => resolve(xhr.response);
+                xhr.onerror = reject;
+                xhr.send();
+              });
+            } catch(e) { console.warn('Failed to cache audio buffer', e); }
+          }
+
           return {
             visual_prompt: safeVisualPrompt,
             audio_text: safeAudioText,
@@ -689,6 +752,7 @@ export default function VideoAdGenerator() {
             userMediaUrl: userMediaUrl,
             userMediaType: userMediaType,
             audioUrl: audioUrl,
+            audioArrayBuffer: audioArrayBuffer,
             duration: 4000,
           };
         })
@@ -1078,10 +1142,10 @@ export default function VideoAdGenerator() {
         mediaElement.currentTime = 0;
         mediaElement.play().catch((e) => console.log(e));
       }
-      if (scene.audioUrl && !scene.audioUrl.startsWith('webspeech:')) {
+      if (scene.audioArrayBuffer || (scene.audioUrl && !scene.audioUrl.startsWith('webspeech:'))) {
         try {
-          // استخدام XMLHttpRequest لتجنب مشاكل fetch مع blob URLs
-          const arrayBuffer = await new Promise((resolve, reject) => {
+          // استخدام الـ ArrayBuffer المحفوظ مباشرة
+          const arrayBuffer = scene.audioArrayBuffer || await new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             xhr.open('GET', scene.audioUrl, true);
             xhr.responseType = 'arraybuffer';
@@ -1089,7 +1153,7 @@ export default function VideoAdGenerator() {
             xhr.onerror = reject;
             xhr.send();
           });
-          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
           const source = audioCtx.createBufferSource();
           source.buffer = audioBuffer;
           source.connect(dest);
@@ -1279,6 +1343,18 @@ export default function VideoAdGenerator() {
                   onChange={(e) => setOpenaiKey(e.target.value)}
                   className="w-full bg-slate-950 border border-emerald-800 rounded-xl py-3 px-4 text-white text-sm focus:border-emerald-500 font-mono"
                   placeholder="sk-..."
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-black text-purple-400 mb-1">
+                  مفتاح ElevenLabs (أفضل جودة + لهجة مغربية) 🇲🇦
+                </label>
+                <input
+                  type="password"
+                  value={elevenlabsKey}
+                  onChange={(e) => setElevenlabsKey(e.target.value)}
+                  className="w-full bg-slate-950 border border-purple-800 rounded-xl py-3 px-4 text-white text-sm focus:border-purple-500 font-mono"
+                  placeholder="sk_..."
                 />
               </div>
             </div>
